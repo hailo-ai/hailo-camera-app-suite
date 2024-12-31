@@ -1,0 +1,50 @@
+{
+    "output_video": {
+        "method": "INTERPOLATION_TYPE_BILINEAR",
+        "format": "IMAGE_FORMAT_NV12",
+        "grayscale": false,
+        "resolutions": [
+            {
+                "width": 3840,
+                "height": 2160,
+                "framerate": 30,
+                "pool_max_buffers": 15
+            },
+            {
+                "width": 3840,
+                "height": 2160,
+                "framerate": 15,
+                "pool_max_buffers": 10
+            },
+            {
+                "width": 1920,
+                "height": 1080,
+                "framerate": 30,
+                "pool_max_buffers": 10
+            },
+            {
+                "width": 1280,
+                "height": 720,
+                "framerate": 30,
+                "pool_max_buffers": 10
+            },
+            {
+                "width": 640,
+                "height": 480,
+                "framerate": 30,
+                "pool_max_buffers": 10
+            }
+        ]
+    },
+    "digital_zoom": {
+        "enabled": false,
+        "mode": "DIGITAL_ZOOM_MODE_ROI",
+        "magnification": 1,
+        "roi": {
+            "x": 200,
+            "y": 200,
+            "width": 2800,
+            "height": 1800
+        }
+    }
+}

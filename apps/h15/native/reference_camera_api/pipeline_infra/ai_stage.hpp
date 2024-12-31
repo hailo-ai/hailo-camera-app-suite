@@ -159,6 +159,10 @@ public:
                 return AppStatus::HAILORT_ERROR;
             }
         }
+        for (auto &queue : m_queues)
+        {
+            queue->flush();
+        }
 
         return AppStatus::SUCCESS;
     }
