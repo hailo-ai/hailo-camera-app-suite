@@ -77,7 +77,7 @@ A second json is provided with the default that can be used to enable low-light 
     
     .. code-block:: bash
 
-        $ cp /usr/lib/medialib/sensors/imx678/default/default/isp_profiles/denoise/3aconfig.json /usr/bin/3aconfig.json
+        $ cp /usr/lib/medialib/sensors/imx678/kit/4k/isp_profiles/denoise/3aconfig.json /usr/bin/3aconfig.json
     
     Then run the app with the new configuration:
 
