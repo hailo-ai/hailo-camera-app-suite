@@ -1,0 +1,15 @@
+{
+    "hailort": {
+        "device-id": "device0"
+    },
+    "defog": {
+        "enabled": true,
+        "network": {
+            "network_path": "/usr/lib/medialib/defog_config/dehazenet.hef",
+            "y_channel": "dehazenet/input_layer1",
+            "uv_channel": "dehazenet/input_layer2",
+            "output_y_channel": "dehazenet/conv17",
+            "output_uv_channel": "dehazenet/ew_add1"
+        }
+    }
+}
