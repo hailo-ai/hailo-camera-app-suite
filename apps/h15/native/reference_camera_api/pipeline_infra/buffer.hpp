@@ -18,6 +18,7 @@ enum class MetadataType
     UNKNOWN,
     TENSOR,
     EXPECTED_CROPS,
+    SIZE,
 };
 
 class Metadata 
@@ -66,6 +67,27 @@ public:
     }
 };
 using BufferMetadataPtr = std::shared_ptr<BufferMetadata>;
+
+class SizeMetadata : public Metadata 
+{
+private:
+    std::string m_label;
+    int m_size;
+public:
+    SizeMetadata(std::string label, size_t size) : Metadata(MetadataType::SIZE), m_label(label), m_size(size)
+    {}
+
+    std::string get_label()
+    {
+        return m_label;
+    }
+
+    int get_size()
+    {
+        return m_size;
+    }
+};
+using SizeMetadataPtr = std::shared_ptr<SizeMetadata>;
 
 class TensorMetadata : public BufferMetadata
 {

@@ -13,6 +13,7 @@ protected:
     size_t m_main_queue_size;
     std::string m_sub_inlet_name;
     size_t m_sub_queue_size;
+    int m_static_sub_frames;
     bool m_multi_scale;
     float m_iou_threshold;
     float m_border_threshold;
@@ -20,12 +21,25 @@ protected:
 public:
     AggregatorStage(std::string name, bool blocking, 
                     std::string main_inlet_name, size_t main_queue_size, 
-                    std::string sub_inlet_name, size_t sub_queue_size, 
+                    std::string sub_inlet_name, size_t sub_queue_size,
                     bool multi_scale=false, float iou_threshold=0.3, float m_border_threshold=0.1,
                     bool leaky=false, bool print_fps=false) : 
         ConnectedStage(name, main_queue_size, leaky, print_fps), m_blocking(blocking), 
         m_main_inlet_name(main_inlet_name), m_main_queue_size(main_queue_size), 
-        m_sub_inlet_name(sub_inlet_name), m_sub_queue_size(sub_queue_size), 
+        m_sub_inlet_name(sub_inlet_name), m_sub_queue_size(sub_queue_size), m_static_sub_frames(-1),
+        m_multi_scale(multi_scale), m_iou_threshold(iou_threshold), m_border_threshold(m_border_threshold)
+        {
+            m_queues.push_back(std::make_shared<Queue>(m_main_inlet_name, m_main_queue_size, leaky));
+            m_queues.push_back(std::make_shared<Queue>(m_sub_inlet_name, m_sub_queue_size, leaky));
+        }
+    AggregatorStage(std::string name, bool blocking, 
+                    std::string main_inlet_name, size_t main_queue_size, 
+                    std::string sub_inlet_name, size_t sub_queue_size, int static_sub_frames,
+                    bool multi_scale=false, float iou_threshold=0.3, float m_border_threshold=0.1,
+                    bool leaky=false, bool print_fps=false) : 
+        ConnectedStage(name, main_queue_size, leaky, print_fps), m_blocking(blocking), 
+        m_main_inlet_name(main_inlet_name), m_main_queue_size(main_queue_size), 
+        m_sub_inlet_name(sub_inlet_name), m_sub_queue_size(sub_queue_size), m_static_sub_frames(static_sub_frames),
         m_multi_scale(multi_scale), m_iou_threshold(iou_threshold), m_border_threshold(m_border_threshold)
         {
             m_queues.push_back(std::make_shared<Queue>(m_main_inlet_name, m_main_queue_size, leaky));
@@ -161,20 +175,25 @@ public:
 
             // Check if the main buffer has cropping metadata
             int num_subframes = 0; // If no cropping meta provided, then no subframes are requested
-            std::vector<MetadataPtr> metadata = main_buffer->get_metadata_of_type(MetadataType::EXPECTED_CROPS);
-            if (metadata.size() > 0)
+            if (m_static_sub_frames >= 0)
             {
-                CroppingMetadataPtr cropping_metadata = std::dynamic_pointer_cast<CroppingMetadata>(metadata[0]);
-                num_subframes = cropping_metadata->get_num_crops();
-                main_buffer->remove_metadata(cropping_metadata);
-            }
-            // If no subframes are requested, send the main buffer as is
-            if (num_subframes == 0)
-            {
-                main_buffer->add_time_stamp(m_stage_name);
-                set_duration(main_buffer);
-                send_to_subscribers(main_buffer);
-                continue;
+                num_subframes = m_static_sub_frames; // Static settings override metadata
+            } else {
+                std::vector<MetadataPtr> metadata = main_buffer->get_metadata_of_type(MetadataType::EXPECTED_CROPS);
+                if (metadata.size() > 0)
+                {
+                    CroppingMetadataPtr cropping_metadata = std::dynamic_pointer_cast<CroppingMetadata>(metadata[0]);
+                    num_subframes = cropping_metadata->get_num_crops();
+                    main_buffer->remove_metadata(cropping_metadata);
+                }
+                // If no subframes are requested, send the main buffer as is
+                if (num_subframes == 0)
+                {
+                    main_buffer->add_time_stamp(m_stage_name);
+                    set_duration(main_buffer);
+                    send_to_subscribers(main_buffer);
+                    continue;
+                }
             }
 
             //Check how many sub frames are available, wait if blocking is enabled
@@ -253,6 +272,21 @@ public:
         }
     
         deinit();
+    }
+
+    /**
+     * @brief Deinitialize the post-processing stage loaded library.
+     * 
+     * @return AppStatus Status of the deinitialization.
+     */
+    AppStatus deinit() override
+    {
+        for (auto &queue : m_queues)
+        {
+            queue->flush();
+        }
+    
+        return AppStatus::SUCCESS;
     }
 
 };
