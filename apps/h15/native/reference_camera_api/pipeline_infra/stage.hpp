@@ -35,12 +35,23 @@ enum class AppStatus
     DMA_ERROR
 };
 
+/* StagePoolMode: once no available buffer in the stage pool
+Leaky - drop the current frame
+Blocking - wait till the next available buffer.
+Fail on empty - return an error.
+*/
+enum class StagePoolMode
+{
+    FAIL_ON_EMPTY_POOL = 0,
+    LEAKY,
+    BLOCKING,
+    STAGE_POOL_MODE_MAX
+};
+
 class Stage
 {
 protected:
     bool m_end_of_stream = false;
-    std::unique_ptr<std::condition_variable> m_condvar;
-    std::shared_ptr<std::mutex> m_mutex;
     std::string m_stage_name;
     std::thread m_thread;
 
@@ -53,11 +64,7 @@ protected:
     int m_counter = 0;
 
 public:
-    Stage(std::string name, bool print_fps) : m_stage_name(name), m_print_fps(print_fps)
-    {
-        m_mutex = std::make_shared<std::mutex>();
-        m_condvar = std::make_unique<std::condition_variable>();
-    }
+    Stage(std::string name, bool print_fps) : m_stage_name(name), m_print_fps(print_fps) {}
 
     virtual ~Stage() = default;
 
@@ -177,7 +184,6 @@ public:
                 break;
             }
         }
-        m_condvar->notify_one();
     }
 
     void set_end_of_stream(bool end_of_stream)

@@ -6,14 +6,14 @@ function init_variables() {
     script_dir=$(dirname $(realpath "$0"))
     source $script_dir/../../../../../scripts/misc/checks_before_run.sh
 
-    readonly SRC_0="rtsp://<IP>/?h264x=4 <user-id> <user-pw>"
-    readonly SRC_1="rtsp://<IP>/?h264x=4 <user-id> <user-pw>"
-    readonly SRC_2="rtsp://<IP>/?h264x=4 <user-id> <user-pw>"
-    readonly SRC_3="rtsp://<IP>/?h264x=4 <user-id> <user-pw>"
-    readonly SRC_4="rtsp://<IP>/?h264x=4 <user-id> <user-pw>"
-    readonly SRC_5="rtsp://<IP>/?h264x=4 <user-id> <user-pw>"
-    readonly SRC_6="rtsp://<IP>/?h264x=4 <user-id> <user-pw>"
-    readonly SRC_7="rtsp://<IP>/?h264x=4 <user-id> <user-pw>"
+    readonly SRC_0="rtsp://192.168.231.151/?h264x=4 user-id=devuser01! user-pw=DevUser01!"
+    readonly SRC_1="rtsp://192.168.231.152/?h264x=4 user-id=devuser01! user-pw=DevUser01!"
+    readonly SRC_2="rtsp://192.168.231.153/?h264x=4 user-id=devuser01! user-pw=DevUser01!"
+    readonly SRC_3="rtsp://192.168.231.154/?h264x=4 user-id=devuser01! user-pw=DevUser01!"
+    readonly SRC_4="rtsp://192.168.231.163/?h264x=4 user-id=devuser01! user-pw=DevUser01!"
+    readonly SRC_5="rtsp://192.168.231.156/?h264x=4 user-id=devuser01! user-pw=DevUser01!"
+    readonly SRC_6="rtsp://192.168.231.164/?h264x=4 user-id=devuser01! user-pw=DevUser01!"
+    readonly SRC_7="rtsp://192.168.231.161/?h264x=4 user-id=devuser01! user-pw=DevUser01!"
 
     readonly RESOURCES_DIR="$TAPPAS_WORKSPACE/apps/h8/gstreamer/general/multistream_multidevice/resources"
     readonly DETECTION_HEF_PATH="$RESOURCES_DIR/yolov5m_wo_spp_60p.hef"
