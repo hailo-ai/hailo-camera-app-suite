@@ -8,21 +8,55 @@
 // infra includes
 #include "stage.hpp"
 
+enum class StageType
+{
+    GENERAL = 0,
+    SOURCE,
+    SINK
+};
+
 class Pipeline
 {
 private:
-    std::vector<StagePtr> m_stages;
+    std::vector<StagePtr> m_stages;      // All stages, used for full queries (get and print)
+    std::vector<StagePtr> m_gen_stages;  // For general type stages
+    std::vector<StagePtr> m_src_stages;  // For source type stages
+    std::vector<StagePtr> m_sink_stages; // For sink type stages
 
 public:
 
-    void add_stage(StagePtr stage)
+    void add_stage(StagePtr stage, StageType type=StageType::GENERAL)
     {
+        switch (type)
+        {
+        case StageType::SOURCE:
+            m_src_stages.push_back(stage);
+            break;
+        case StageType::SINK:
+            m_sink_stages.push_back(stage);
+            break;
+        default:
+            m_gen_stages.push_back(stage);
+        }
         m_stages.push_back(stage);
     }
 
     void start_pipeline()
     {
-        for (auto &stage : m_stages)
+        // Start the sink stages
+        for (auto &stage : m_sink_stages)
+        {
+            stage->start();
+        }
+
+        // Start the general stages
+        for (auto &stage : m_gen_stages)
+        {
+            stage->start();
+        }
+
+        // Start the source stages
+        for (auto &stage : m_src_stages)
         {
             stage->start();
         }
@@ -30,7 +64,20 @@ public:
 
     void stop_pipeline()
     {
-        for (auto &stage : m_stages)
+        // Stop the source stages
+        for (auto &stage : m_src_stages)
+        {
+            stage->stop();
+        }
+
+        // Stop the general stages
+        for (auto &stage : m_gen_stages)
+        {
+            stage->stop();
+        }
+
+        // Stop the sink stages
+        for (auto &stage : m_sink_stages)
         {
             stage->stop();
         }
