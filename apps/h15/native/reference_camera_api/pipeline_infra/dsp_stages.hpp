@@ -28,7 +28,10 @@ protected:
 
     std::string m_main_subscriber; /**< Name of the main subscriber */
     std::string m_sub_subscriber; /**< Name of the sub-subscriber */
+    std::condition_variable m_available_buffers_cv;
+    std::mutex m_buff_pool_mutex;
 
+    StagePoolMode m_pool_mode; //< Pool mode for the buffer pool used in this stage
 public:
     /**
      * @brief Constructor to initialize the stage with specified parameters.
@@ -47,10 +50,11 @@ public:
     DspBaseCropStage(std::string name, int output_pool_size, int input_width, int input_height, 
                     int output_width, int output_height,
                     std::string main_sub_name, std::string sub_sub_name,
-                    size_t queue_size, bool leaky = false, bool print_fps=false) : ConnectedStage(name, queue_size, leaky, print_fps),
+                    size_t queue_size, bool leaky = false, bool print_fps=false,
+                    StagePoolMode pool_mode=StagePoolMode::FAIL_ON_EMPTY_POOL) : ConnectedStage(name, queue_size, leaky, print_fps),
                                           m_output_pool_size(output_pool_size), m_input_width(input_width), m_input_height(input_height), 
                                           m_output_width(output_width), m_output_hight(output_height),
-                                          m_main_subscriber(main_sub_name), m_sub_subscriber(sub_sub_name) {}
+                                          m_main_subscriber(main_sub_name), m_sub_subscriber(sub_sub_name), m_pool_mode(pool_mode) {}
 
     
     /**
@@ -132,7 +136,7 @@ public:
         std::vector<hailo_dsp_buffer_data_t> output_dsp_buffers;
         prepare_crops(data, crop_resize_dims);
 
-        std::size_t num_crops_allowed = std::min(crop_resize_dims.size(), (std::size_t)m_output_pool_size);
+        std::size_t num_crops_allowed = std::min(crop_resize_dims.size(), (std::size_t)m_buffer_pool->get_available_buffers_count());
 
         crops_params.reserve(num_crops_allowed);
         output_dsp_buffers.reserve(num_crops_allowed);
@@ -144,8 +148,21 @@ public:
             HailoMediaLibraryBufferPtr cropped_buffer = std::make_shared<hailo_media_library_buffer>();
             if (m_buffer_pool->acquire_buffer(cropped_buffer) != MEDIA_LIBRARY_SUCCESS)
             {
-                std::cerr << "Failed to acquire buffer " << m_stage_name <<std::endl;
-                return AppStatus::DSP_OPERATION_ERROR;
+                if (m_pool_mode == StagePoolMode::FAIL_ON_EMPTY_POOL) {
+                    for (auto& buffer : cropped_buffers) {
+                        buffer.reset();
+                    }
+                    return AppStatus::BUFFER_ALLOCATION_ERROR;
+                } else if (m_pool_mode == StagePoolMode::BLOCKING) {
+                    std::unique_lock<std::mutex> lock(m_buff_pool_mutex);
+                    m_available_buffers_cv.wait(lock, [this, cropped_buffer] { return m_buffer_pool->acquire_buffer(cropped_buffer) == MEDIA_LIBRARY_SUCCESS; });
+                } else {
+                    /* Leaky */
+                    for (auto& buffer : cropped_buffers) {
+                        buffer.reset();
+                    }
+                    return AppStatus::SUCCESS;
+                }
             }
 
             output_dsp_buffers.emplace_back(std::move(cropped_buffer->buffer_data->As<hailo_dsp_buffer_data_t>()));
@@ -200,7 +217,7 @@ public:
 
         if (m_print_fps)
         {
-            std::cout << "Crop and resize time = " << std::chrono::duration_cast<std::chrono::microseconds>(end - begin).count() 
+            std::cout << m_stage_name << " crop and resize time = " << std::chrono::duration_cast<std::chrono::microseconds>(end - begin).count() 
                       << "[microseconds]" << "Number of crops: " << crop_resize_dims.size() << std::endl;
         }
 
@@ -236,10 +253,10 @@ public:
     TillingCropStage(std::string name, int output_pool_size, int input_width, int input_height, 
                 int output_width, int output_height,
                 std::string main_sub_name, std::string sub_sub_name, std::vector<HailoBBox> bbox_tiles,
-                size_t queue_size, bool leaky=false, bool print_fps=false) : DspBaseCropStage(name, output_pool_size, input_width, input_height,
+                size_t queue_size, bool leaky=false, bool print_fps=false, StagePoolMode pool_mode=StagePoolMode::FAIL_ON_EMPTY_POOL) : DspBaseCropStage(name, output_pool_size, input_width, input_height,
                                                                         output_width, output_height,
                                                                         main_sub_name, sub_sub_name,
-                                                                        queue_size, leaky, print_fps), m_bbox_tiles(bbox_tiles) {}
+                                                                        queue_size, leaky, print_fps, pool_mode), m_bbox_tiles(bbox_tiles) {}
     /**
      * @brief Initializes the buffer pool and tile ROIs.
      * @return Status of the operation.
@@ -326,10 +343,10 @@ public:
     BBoxCropStage(std::string name, int output_pool_size, int input_width, int input_height, 
                 int output_width, int output_height,
                 std::string main_sub_name, std::string sub_sub_name, std::string label,
-                size_t queue_size, bool leaky=false, bool print_fps=false) : DspBaseCropStage(name, output_pool_size, input_width, input_height,
+                size_t queue_size, bool leaky=false, bool print_fps=false, StagePoolMode pool_mode=StagePoolMode::FAIL_ON_EMPTY_POOL) : DspBaseCropStage(name, output_pool_size, input_width, input_height,
                                                                         output_width, output_height,
                                                                         main_sub_name, sub_sub_name,
-                                                                        queue_size, leaky), m_target_label(label) { }
+                                                                        queue_size, leaky, print_fps, pool_mode), m_target_label(label) { }
 
     /**
      * @brief Initializes the buffer pool.

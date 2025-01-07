@@ -1,0 +1,2 @@
+# In cases where build.release is already there, ignore it
+core/hailo/build.release/
