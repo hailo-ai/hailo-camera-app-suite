@@ -134,6 +134,10 @@ public:
         {
             dlclose(m_loaded_lib);
         }
+        for (auto &queue : m_queues)
+        {
+            queue->flush();
+        }
     
         return AppStatus::SUCCESS;
     }

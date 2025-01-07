@@ -25,12 +25,6 @@
                 "pool_max_buffers": 14
             },
             {
-                "width": 720,
-                "height": 480,
-                "framerate": 30,
-                "pool_max_buffers": 13
-            },
-            {
                 "width": 1920,
                 "height": 1080,
                 "framerate": 15,
@@ -140,7 +134,7 @@
     },
     "hdr": {
         "enabled": true,
-        "dol": 3
+        "dol": 2
     },
     "denoise": {
         "enabled": false,
