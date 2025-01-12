@@ -65,6 +65,14 @@ Some extra flags are available to run the application with different configurati
             -l, --print-latency         Print Latency
             -c, --config-file-path arg  Frontend Configuration Path (default: 
                                         /home/root/apps/ai_example_app/resources/configs/frontend_config.json)
+            -s, --skip-drawing          Skip drawing
+            -p, --partial-landmarks     Draw partial landmarks
+
+Some of the flags control basic pipeline functionality (timeout / print-fps), in particular the **--skip-drawing** 
+and **--partial-landmarks** flags can be used to control the drawing behavior of the pipeline. Drawing bounding boxes and face landmarks
+can be compute heavy at large quantities and may impact performance. The **--skip-drawing** flag will disable all drawing, 
+while the **--partial-landmarks** flag will only draw the landmarks of the eyes. For running the application
+on large crowds, it is recommended to use these flags.
 
 Note that you have the option to change the configuration file path for the vision pipeline configurations: **--config-file-path**. 
 A second json is provided with the default that can be used to enable low-light enhancement (denoising).
@@ -77,7 +85,7 @@ A second json is provided with the default that can be used to enable low-light 
     
     .. code-block:: bash
 
-        $ cp /usr/lib/medialib/sensors/imx678/default/default/isp_profiles/denoise/3aconfig.json /usr/bin/3aconfig.json
+        $ cp /usr/lib/medialib/sensors/imx678/kit_sc65a/4k/isp_profiles/lowlight/3aconfig.json /usr/bin/3aconfig.json
     
     Then run the app with the new configuration:
 
@@ -106,7 +114,7 @@ Below you can see the pipeline that the application is running:
 
 This may look like a lot at first, so we will break it down into smaller peices later. For now the key takeways are:
 
-- The pipeline outputs 3 streams: two of just video (HD and SD), and a third (4K) with the inference overlay.
+- The pipeline outputs 2 streams: one of just video (HD), and a third (4K) with the inference overlay.
 - The AI pipeline is comprised of two stages:
     - The first stage performs yolo object detection (person and face classes) on a tiled stream
         - Netwrork: yolov5s_personface_nv12
@@ -131,7 +139,6 @@ To target another port, you will need to change the port number in the pipeline 
 The application outputs streams to the following port numbers:
 
 - HD Stream: 5002
-- SD Stream: 5004
 - 4K Stream: 5000
 
 For example, to display the HD stream run the following ajusted pipeline on the host machine:

@@ -42,7 +42,7 @@ class H15NativeInstaller(MesonInstaller):
         return self.LIBARGS_TEMPLATE.format(get_includes(self.INCLUDES))
 
     def get_meson_build_command(self):
-        usr_path = os.path.join(self._toolchain_rootfs_base_path, 'usr')
+        usr_path = '/usr' # This will be extended from toolchain rootfs base path
 
         rapidjson_root = f'{self._open_source_root}/rapidjson'
 
@@ -67,6 +67,7 @@ def parse_args():
     parser.add_argument('--remote-machine-ip', help='remote machine ip')
     parser.add_argument('--clean-build-dir', action='store_true', help='Delete previous build cache (default false)', default=False)
     parser.add_argument('--install-to-rootfs', action='store_true', help='Install to rootfs (default false)', default=False)
+    parser.add_argument('--check-req-packages', action='store_true', help='Install compiler packages (default false)', default=False)
 
     return parser.parse_args()
 
@@ -75,7 +76,8 @@ if __name__ == '__main__':
     args = parse_args()
     logging.basicConfig(stream=sys.stdout, level=logging.INFO)
 
-    install_compilers_apt_packages(Arch.ARMV8A)
+    if args.check_req_packages:
+        install_compilers_apt_packages(Arch.ARMV8A)
 
     gst_installer = H15NativeInstaller(arch=Arch.ARMV8A, target=args.target, build_type=args.build_type,
                                         toolchain_dir_path=args.toolchain_dir_path,

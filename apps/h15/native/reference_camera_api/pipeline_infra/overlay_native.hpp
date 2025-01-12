@@ -27,7 +27,7 @@ typedef enum
     OVERLAY_STATUS_OK,
 
 } overlay_status_t;
-overlay_status_t draw_all(HailoMat &hmat, HailoROIPtr roi, float landmark_point_radius, bool show_confidence = true, bool local_gallery = false, uint mask_overlay_n_threads = 0);
+overlay_status_t draw_all(HailoMat &hmat, HailoROIPtr roi, float landmark_point_radius, bool show_confidence = true, bool local_gallery = false, uint mask_overlay_n_threads = 0, bool partial_landmarks = false, size_t min_landmark = 0, size_t max_landmark = 0);
 void face_blur(HailoMat &mat, HailoROIPtr roi);
 
 cv::Scalar indexToColor(size_t index);
@@ -117,7 +117,8 @@ static std::string get_classification_text(HailoClassificationPtr result, bool s
     return text;
 }
 
-static overlay_status_t draw_landmarks(HailoMat &hmat, HailoLandmarksPtr landmarks, HailoROIPtr roi, float landmark_point_radius)
+static overlay_status_t draw_landmarks(HailoMat &hmat, HailoLandmarksPtr landmarks, HailoROIPtr roi, float landmark_point_radius,
+                                       bool partial_landmarks = false, size_t min_landmark = 0, size_t max_landmark = 0)
 {
     HailoBBox bbox = roi->get_bbox();
     int thickness;
@@ -146,8 +147,14 @@ static overlay_status_t draw_landmarks(HailoMat &hmat, HailoLandmarksPtr landmar
             hmat.draw_line(joint1, joint2, get_color(4), thickness, cv::LINE_4);
         }
     }
+    size_t i = 0;
     for (auto &point : points)
     {
+        if (partial_landmarks && (i < min_landmark || i > max_landmark))
+        {
+            ++i;
+            continue;
+        }
         if (point.confidence() >= landmarks->get_threshold())
         {
             uint x = ((point.x() * bbox.width()) + bbox.xmin()) * hmat.native_width();
@@ -156,6 +163,7 @@ static overlay_status_t draw_landmarks(HailoMat &hmat, HailoLandmarksPtr landmar
             auto center = cv::Point(x, y);
             hmat.draw_ellipse(center, {R, R}, 0, 0, 360, get_color(7), landmark_point_radius);
         }
+        ++i;
     }
     return OVERLAY_STATUS_OK;
 }
@@ -355,7 +363,8 @@ static overlay_status_t draw_conf_class_mask(cv::Mat &image_planes, HailoConfCla
     return OVERLAY_STATUS_OK;
 }
 
-overlay_status_t draw_all(HailoMat &hmat, HailoROIPtr roi, float landmark_point_radius, bool show_confidence, bool local_gallery, const uint mask_overlay_n_threads)
+overlay_status_t draw_all(HailoMat &hmat, HailoROIPtr roi, float landmark_point_radius, bool show_confidence, bool local_gallery, const uint mask_overlay_n_threads,
+                          bool partial_landmarks, size_t min_landmark, size_t max_landmark)
 {
     overlay_status_t ret = OVERLAY_STATUS_UNINITIALIZED;
     uint number_of_classifications = 0;
@@ -394,7 +403,7 @@ overlay_status_t draw_all(HailoMat &hmat, HailoROIPtr roi, float landmark_point_
             hmat.draw_text(text, text_position, font_scale, color);
 
             // Draw inner objects.
-            ret = draw_all(hmat, detection, landmark_point_radius, show_confidence, local_gallery, mask_overlay_n_threads);
+            ret = draw_all(hmat, detection, landmark_point_radius, show_confidence, local_gallery, mask_overlay_n_threads, partial_landmarks, min_landmark, max_landmark);
             break;
         }
         case HAILO_CLASSIFICATION:
@@ -421,14 +430,14 @@ overlay_status_t draw_all(HailoMat &hmat, HailoROIPtr roi, float landmark_point_
         case HAILO_LANDMARKS:
         {
             HailoLandmarksPtr landmarks = std::dynamic_pointer_cast<HailoLandmarks>(obj);
-            draw_landmarks(hmat, landmarks, roi, landmark_point_radius);
+            draw_landmarks(hmat, landmarks, roi, landmark_point_radius, partial_landmarks, min_landmark, max_landmark);
             break;
         }
         case HAILO_TILE:
         {
             HailoTileROIPtr tile = std::dynamic_pointer_cast<HailoTileROI>(obj);
             draw_tile(hmat, tile);
-            draw_all(hmat, tile, landmark_point_radius, show_confidence, local_gallery, mask_overlay_n_threads);
+            draw_all(hmat, tile, landmark_point_radius, show_confidence, local_gallery, mask_overlay_n_threads, partial_landmarks, min_landmark, max_landmark);
             break;
         }
         case HAILO_UNIQUE_ID:

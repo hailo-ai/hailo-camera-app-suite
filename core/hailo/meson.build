@@ -1,7 +1,7 @@
 # Project Declaration
 
 project('gst-hailo-tools', 'c', 'cpp',
-        version : '3.30.0',
+        version : '1.6.0',
         default_options : [ 'buildtype=release',
                             'c_std=c11', 'cpp_std=c++17']
        )
@@ -135,6 +135,9 @@ if target == 'all'
   subdir('apps')
   subdir('tracers')
 
+  if get_option('include_unit_tests')
+    subdir('unit_tests')
+  endif
 elif target == 'apps'
   subdir('metadata')
   subdir('tracking')

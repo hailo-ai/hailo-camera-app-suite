@@ -1,0 +1,18 @@
+{
+    "osd":
+    {
+        "image": [
+            {
+                "id": "example_image1",
+                "image_path": "/home/root/apps/detection/resources/configs/osd_hailo_static_image.png",
+                "width": 0.2,
+                "height": 0.13,
+                "x": 0.05,
+                "y": 0.05,
+                "z-index": 1,
+                "angle": 0,
+                "rotation_policy": "TOP_LEFT"
+            }
+        ]
+    }
+}
