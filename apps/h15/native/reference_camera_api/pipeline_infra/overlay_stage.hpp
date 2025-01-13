@@ -28,6 +28,10 @@ class OverlayStage : public ConnectedStage
 {
 private:
     HailoOverlay m_hailooverlay_info;   /**< Overlay configuration parameters. */
+    bool m_skip;                        /**< Flag to skip drawing. */
+    bool m_partial_landmarks;           /**< Flag to enable partial landmarks. */
+    size_t m_min_landmark;              /**< Minimum landmark index. */
+    size_t m_max_landmark;              /**< Maximum landmark index. */
     
 public:
     /**
@@ -37,8 +41,9 @@ public:
      * @param leaky Indicates if the queue is leaky.
      * @param print_fps Flag to enable or disable printing FPS information.
      */
-    OverlayStage(std::string name, size_t queue_size=5, bool leaky=false, bool print_fps=false) : 
-        ConnectedStage(name, queue_size, leaky, print_fps){}
+    OverlayStage(std::string name, bool skip=false, bool partial_landmarks = false, size_t min_landmark = 0, size_t max_landmark = 0,
+                 size_t queue_size=5, bool leaky=false, bool print_fps=false) : 
+        ConnectedStage(name, queue_size, leaky, print_fps), m_skip(skip), m_partial_landmarks(partial_landmarks), m_min_landmark(min_landmark), m_max_landmark(max_landmark) {}
 
     /**
      * @brief Initialize the overlay stage.
@@ -74,7 +79,14 @@ public:
     AppStatus process(BufferPtr data)
     {
         std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
-        overlay_status_t ret = OVERLAY_STATUS_UNINITIALIZED;
+
+        if (m_skip)
+        {
+            data->add_time_stamp(m_stage_name);
+            set_duration(data);
+            send_to_subscribers(data);
+            return AppStatus::SUCCESS;
+        }
 
         std::shared_ptr<HailoMat> hmat = std::make_shared<HailoNV12Mat>((uint8_t*)data->get_buffer()->get_plane_ptr(0),
                                               data->get_buffer()->buffer_data->height,
@@ -85,7 +97,6 @@ public:
                                               m_hailooverlay_info.font_thickness,
                                               (uint8_t*)data->get_buffer()->get_plane_ptr(0),
                                               (uint8_t*)data->get_buffer()->get_plane_ptr(1));
-
         if (hmat)
         {
             if (DmaMemoryAllocator::get_instance().dmabuf_sync_start(data->get_buffer()->get_plane_ptr(0)) != MEDIA_LIBRARY_SUCCESS)
@@ -98,7 +109,8 @@ public:
                 face_blur(*hmat.get(), data->get_roi());
             }
             // Draw all results of the given roi on mat.
-            ret = draw_all(*hmat.get(), data->get_roi(), m_hailooverlay_info.landmark_point_radius, m_hailooverlay_info.show_confidence, m_hailooverlay_info.local_gallery, m_hailooverlay_info.mask_overlay_n_threads);
+            overlay_status_t ret = draw_all(*hmat.get(), data->get_roi(), m_hailooverlay_info.landmark_point_radius, m_hailooverlay_info.show_confidence, m_hailooverlay_info.local_gallery, m_hailooverlay_info.mask_overlay_n_threads,
+                                            m_partial_landmarks, m_min_landmark, m_max_landmark);
             if (ret != OVERLAY_STATUS_OK)
             {
                 std::cerr << " Overlay failure draw_all failed, status = " << ret << std::endl;

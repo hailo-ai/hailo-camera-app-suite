@@ -18,7 +18,7 @@ Anatomy of a Pipeline
 A pipeline is made of discrete components that are connected together to form a data processing chain. Each component
 should be able to process data asynchronously and in parallel with other components. This allows for the pipeline to
 stream buffers and reduce latency. Data processing can be anything from image transfromations (dewarping) to masking (privacy mask) to inference.
-The Hailo media Library that is comes with the Hailo15 software suite provides 2 such components that can be used out of the box: **Frontend** and **Encoder** c++ modules.
+The Hailo Media Library that comes with the Hailo15 software suite provides 2 such components that can be used out of the box: **Frontend** and **Encoder** c++ modules.
 
 .. figure:: readme_resources/app_structure/pipeline.png
     :alt: Application Pipeline
@@ -79,7 +79,7 @@ As the main data structure that is passed between stages, the Buffer class is a 
 This is the format for output buffers from all Media Library operations such as dewarping and resizing. The HailoMediaLibraryBufferPtr can represent an image using DMA memory, which is the default memory type in this application.
 Media Library also offers a buffer pool class - MediaLibraryBufferPool - that can be used to allocate and manage buffers in a pool. This is useful for reusing buffers and reducing memory allocation overhead.
 The pool also allows the allocation of DMA memory (shown in certain stages like HailortAsyncStage).
-All code for the Buffer class and related metadata can be found in **infra/buffer.hpp**
+All code for the Buffer class and related metadata can be found in **pipeline_infra/buffer.hpp**
 
 Buffer
 ------
@@ -199,7 +199,7 @@ Queue
 
 Now that we know how to contain data in our pipeline, we need a Queue class to manage the flow of data between stages. 
 The Queue class is a simple wrapper around an *std::queue* that supports blocking operations and a limited queue size.
-You can find all code associated with Queue in **infra/queue.hpp**.
+You can find all code associated with Queue in **pipeline_infra/queue.hpp**.
 
         .. code-block:: cpp
 
@@ -307,7 +307,7 @@ Stage
 =====
 
 Now that we have a way to pass data between stages, we need a way to process that data. 
-The Stage class is a generic class that represents a stage in the pipeline, it's code can be found in **infra/stage.hpp**:
+The Stage class is a generic class that represents a stage in the pipeline, it's code can be found in **pipeline_infra/stage.hpp**:
 
         .. code-block:: cpp
 
@@ -489,23 +489,46 @@ Loop
 Pipeline
 ========
 Now that we have all the components we need to build a pipeline, we can connect them together to form a data processing chain.
-This class is the simplest in the infrastructure, it can be found in **infra/pipeline.hpp**:
+This class is the simplest in the infrastructure, it can be found in **pipeline_infra/pipeline.hpp**:
 
             .. code-block:: cpp
+
+                enum class StageType
+                {
+                    GENERAL = 0,
+                    SOURCE,
+                    SINK
+                };
 
                 class Pipeline
                 {
                 private:
-                    std::vector<StagePtr> m_stages;
+                    std::vector<StagePtr> m_stages;      // All stages, used for full queries (get and print)
+                    std::vector<StagePtr> m_gen_stages;  // For general type stages
+                    std::vector<StagePtr> m_src_stages;  // For source type stages
+                    std::vector<StagePtr> m_sink_stages; // For sink type stages
 
                 public:
 
-                    void add_stage(StagePtr stage)
+                    void add_stage(StagePtr stage, StageType type=StageType::GENERAL)
                     {
+                        switch (type)
+                        {
+                        case StageType::SOURCE:
+                            m_src_stages.push_back(stage);
+                            break;
+                        case StageType::SINK:
+                            m_sink_stages.push_back(stage);
+                            break;
+                        default:
+                            m_gen_stages.push_back(stage);
+                        }
                         m_stages.push_back(stage);
                     }
 
-    All it holds is a vector of **StagePtr** (shared pointers to the parent **Stage** class).
+    All it holds are vectors of **StagePtr** (shared pointers to the parent **Stage** class).
+    We separate stages into source, sink, and general types. This is useful when starting and stopping the pipeline, 
+    as we can start and stop stages in a specific order.
 
     The key functionality of the pipeline is to start and stop all stages:
 
@@ -513,7 +536,20 @@ This class is the simplest in the infrastructure, it can be found in **infra/pip
 
                 void start_pipeline()
                 {
-                    for (auto &stage : m_stages)
+                    // Start the sink stages
+                    for (auto &stage : m_sink_stages)
+                    {
+                        stage->start();
+                    }
+
+                    // Start the general stages
+                    for (auto &stage : m_gen_stages)
+                    {
+                        stage->start();
+                    }
+
+                    // Start the source stages
+                    for (auto &stage : m_src_stages)
                     {
                         stage->start();
                     }
@@ -521,7 +557,20 @@ This class is the simplest in the infrastructure, it can be found in **infra/pip
 
                 void stop_pipeline()
                 {
-                    for (auto &stage : m_stages)
+                    // Stop the source stages
+                    for (auto &stage : m_src_stages)
+                    {
+                        stage->stop();
+                    }
+
+                    // Stop the general stages
+                    for (auto &stage : m_gen_stages)
+                    {
+                        stage->stop();
+                    }
+
+                    // Stop the sink stages
+                    for (auto &stage : m_sink_stages)
                     {
                         stage->stop();
                     }
@@ -551,69 +600,83 @@ The main.cpp file is where the pipeline is built and run. It is the entry point 
 
                 int main(int argc, char *argv[])
                 {
-                    // App resources 
-                    std::shared_ptr<AppResources> app_resources = std::make_shared<AppResources>();
-                    app_resources->frontend_config = FRONTEND_CONFIG_FILE;
-
-                    // register signal SIGINT and signal handler
-                    signal_utils::register_signal_handler([app_resources](int signal)
-                    { 
-                        std::cout << "Stopping Pipeline..." << std::endl;
-                        // Stop pipeline
-                        stop_app(app_resources);
-                        // terminate program  
-                        exit(0); 
-                    });
-
-                    // Parse user arguments
-                    cxxopts::Options options = build_arg_parser();
-                    auto result = options.parse(argc, argv);
-                    std::vector<ArgumentType> argument_handling_results = handle_arguments(result, options);
-                    int timeout  = result["timeout"].as<int>();
-
-                    for (ArgumentType argument : argument_handling_results)
                     {
-                        switch (argument)
+                        // App resources 
+                        std::shared_ptr<AppResources> app_resources = std::make_shared<AppResources>();
+                        app_resources->frontend_config = FRONTEND_CONFIG_FILE;
+
+                        // register signal SIGINT and signal handler
+                        signal_utils::register_signal_handler([app_resources](int signal)
+                        { 
+                            std::cout << "Stopping Pipeline..." << std::endl;
+                            // Stop pipeline
+                            app_resources->pipeline->stop_pipeline();
+                            app_resources->clear();
+                            // terminate program  
+                            exit(0); 
+                        });
+
+                        // Parse user arguments
+                        cxxopts::Options options = build_arg_parser();
+                        auto result = options.parse(argc, argv);
+                        std::vector<ArgumentType> argument_handling_results = handle_arguments(result, options);
+                        int timeout  = result["timeout"].as<int>();
+
+                        for (ArgumentType argument : argument_handling_results)
                         {
-                        case ArgumentType::Help:
-                            return 0;
-                        case ArgumentType::Timeout:
-                            break;
-                        case ArgumentType::PrintFPS:
-                            app_resources->print_fps = true;
-                            break;
-                        case ArgumentType::PrintLatency:
-                            app_resources->print_latency = true;
-                            break;
-                        case ArgumentType::Config:
-                            app_resources->frontend_config = result["config-file-path"].as<std::string>();
-                            break;
-                        case ArgumentType::Error:
-                            return 1;
+                            switch (argument)
+                            {
+                            case ArgumentType::Help:
+                                return 0;
+                            case ArgumentType::Timeout:
+                                break;
+                            case ArgumentType::PrintFPS:
+                                app_resources->print_fps = true;
+                                break;
+                            case ArgumentType::PrintLatency:
+                                app_resources->print_latency = true;
+                                break;
+                            case ArgumentType::Config:
+                                app_resources->frontend_config = result["config-file-path"].as<std::string>();
+                                break;
+                            case ArgumentType::SkipDrawing:
+                                app_resources->skip_drawing = true;
+                                break;
+                            case ArgumentType::PartialLandmarks:
+                                app_resources->partial_landmarks = true;
+                                break;
+                            case ArgumentType::Error:
+                                return 1;
+                            }
                         }
+
+                        // Create pipeline
+                        app_resources->pipeline = std::make_shared<Pipeline>();
+
+                        // Configure frontend and encoders
+                        configure_frontend_and_encoders(app_resources);
+
+                        // Create pipeline and stages
+                        create_ai_pipeline(app_resources);
+
+                        // Subscribe stages to frontend
+                        subscribe_to_frontend(app_resources);
+
+                        // Start pipeline
+                        std::cout << "Starting." << std::endl;
+                        app_resources->pipeline->start_pipeline();
+
+                        std::cout << "Using frontend config: " << app_resources->frontend_config << std::endl;
+                        std::cout << "Started playing for " << timeout << " seconds." << std::endl;
+
+                        // Wait
+                        std::this_thread::sleep_for(std::chrono::seconds(timeout));
+
+                        // Stop pipeline
+                        std::cout << "Stopping." << std::endl;
+                        app_resources->pipeline->stop_pipeline();
+                        app_resources->clear();
                     }
-
-                    // Configure frontend and encoders
-                    configure_frontend_and_encoders(app_resources);
-
-                    // Create pipeline and stages
-                    create_pipeline(app_resources);
-
-                    // Subscribe elements
-                    subscribe_elements(app_resources);
-
-                    // Start pipeline
-                    start_app(app_resources);
-
-                    std::cout << "Using frontend config: " << app_resources->frontend_config << std::endl;
-                    std::cout << "Started playing for " << timeout << " seconds." << std::endl;
-
-                    // Wait
-                    std::this_thread::sleep_for(std::chrono::seconds(timeout));
-
-                    // Stop pipeline
-                    stop_app(app_resources);
-
                     return 0;
                 }
 
@@ -623,14 +686,15 @@ The main.cpp file is where the pipeline is built and run. It is the entry point 
 
                     struct AppResources
                     {
-                        MediaLibraryFrontendPtr frontend;
-                        std::map<output_stream_id_t, MediaLibraryEncoderPtr> encoders;
-                        std::map<output_stream_id_t, UdpModulePtr> udp_outputs;
+                        std::shared_ptr<FrontendStage> frontend;
+                        std::map<output_stream_id_t, std::shared_ptr<EncoderStage>> encoders;
+                        std::map<output_stream_id_t, std::shared_ptr<UdpStage>> udp_outputs;
                         PipelinePtr pipeline;
                         bool print_fps;
                         bool print_latency;
+                        bool skip_drawing;
+                        bool partial_landmarks;
                         std::string frontend_config;
-                    };
     
     This struct gives a convenient way to share application resources between the functions called in main().
     After parsing user arguments and setting a signal handler (to stop the pipeline on CTRL-C or SIGINT), the main function configures the frontend and encoders, creates the pipeline and stages, subscribes elements, and starts the pipeline.
@@ -638,22 +702,25 @@ The main.cpp file is where the pipeline is built and run. It is the entry point 
 Create and Configure Frontend and Encoders
 ------------------------------------------
 
-The Hailo Media Library provides C++ modules for the Frontend and Encoder, which are both configured via JSON strings or files. In this application we save such configuration files and keep their paths in **#define** at the top of the main.cpp file.
-With those files in hand, we can create a frontend module and a new instance of encoder module for each output stream:
+The Hailo Media Library provides C++ modules for the Frontend and Encoder, which are both configured via JSON strings or files. 
+In this application we save such configuration files and keep their paths in **#define** at the top of the main.cpp file.
+With those files in hand, we can create a frontend module and a new instance of encoder module for each output stream.
+Note that the frontend module and encoders were wrapped in the Stage class to be used in the pipeline more conveniently.:
 
             .. code-block:: cpp
 
                 void configure_frontend_and_encoders(std::shared_ptr<AppResources> app_resources)
                 {
                     // Create and configure frontend
-                    std::string frontend_config_string = read_string_from_file(FRONTEND_CONFIG_FILE);
-                    tl::expected<MediaLibraryFrontendPtr, media_library_return> frontend_expected = MediaLibraryFrontend::create(FRONTEND_SRC_ELEMENT_V4L2SRC, frontend_config_string);
-                    if (!frontend_expected.has_value())
+                    std::string frontend_config_string = read_string_from_file(app_resources->frontend_config.c_str());
+                    app_resources->frontend = std::make_shared<FrontendStage>(FRONTEND_STAGE);
+                    app_resources->pipeline->add_stage(app_resources->frontend, StageType::SOURCE);
+                    AppStatus frontend_config_status = app_resources->frontend->configure(frontend_config_string);
+                    if (frontend_config_status != AppStatus::SUCCESS)
                     {
-                        std::cout << "Failed to create frontend" << std::endl;
-                        return;
+                        std::cerr << "Failed to configure frontend " << FRONTEND_STAGE << std::endl;
+                        throw std::runtime_error("Failed to configure frontend");
                     }
-                    app_resources->frontend = frontend_expected.value();
 
                     // Get frontend output streams
                     auto streams = app_resources->frontend->get_outputs_streams();
@@ -671,8 +738,7 @@ With those files in hand, we can create a frontend module and a new instance of 
                             // AI pipeline does not get an encoder since it is merged into 4K
                             continue;
                         }
-
-                        create_encoder_and_output_file(s.id, app_resources);
+                        create_encoder_and_udp(s.id, app_resources);
                     }
                 }
 
@@ -681,36 +747,48 @@ With those files in hand, we can create a frontend module and a new instance of 
 
             .. code-block:: cpp
 
-                void create_encoder_and_output_file(const std::string& id, std::shared_ptr<AppResources> app_resources)
+                void create_encoder_and_udp(const std::string& id, std::shared_ptr<AppResources> app_resources)
                 {
-                    // Create and conifgure udp
-                    std::cout << "Creating encoder udp_" << id << std::endl;
-                    tl::expected<UdpModulePtr, AppStatus> udp_expected = UdpModule::create(id, HOST_IP, PORT_FROM_ID(id), EncodingType::H264);
-                    if (!udp_expected.has_value())
-                    {
-                        std::cout << "Failed to create udp" << std::endl;
-                        return;
-                    }
-                    app_resources->udp_outputs[id] = udp_expected.value();
-
                     // Create and configure encoder
-                    std::cout << "Creating encoder enc_" << id << std::endl;
+                    std::string enc_name = "enc_" + id;
+                    std::cout << "Creating encoder " << enc_name << std::endl;
                     std::string encoderosd_config_string = read_string_from_file(ENCODER_OSD_CONFIG_FILE(id).c_str());
-                    tl::expected<MediaLibraryEncoderPtr, media_library_return> encoder_expected = MediaLibraryEncoder::create(encoderosd_config_string, id);
-                    if (!encoder_expected.has_value())
+                    std::shared_ptr<EncoderStage> encoder_stage = std::make_shared<EncoderStage>(enc_name);
+                    app_resources->encoders[id] = encoder_stage;
+                    AppStatus enc_config_status = encoder_stage->configure(encoderosd_config_string);
+                    if (enc_config_status != AppStatus::SUCCESS)
                     {
-                        std::cout << "Failed to create encoder osd" << std::endl;
-                        return;
+                        std::cerr << "Failed to configure encoder " << enc_name << std::endl;
+                        throw std::runtime_error("Failed to configure encoder");
                     }
-                    app_resources->encoders[id] = encoder_expected.value();
+
+                    // Create and conifgure udp
+                    std::string udp_name = "udp_" + id;
+                    std::cout << "Creating udp " << udp_name << std::endl;
+                    std::shared_ptr<UdpStage> udp_stage = std::make_shared<UdpStage>(udp_name);
+                    app_resources->udp_outputs[id] = udp_stage;
+                    AppStatus udp_config_status = udp_stage->configure(HOST_IP, PORT_FROM_ID(id), EncodingType::H264);
+                    if (udp_config_status != AppStatus::SUCCESS)
+                    {
+                        std::cerr << "Failed to configure udp " << udp_name << std::endl;
+                        throw std::runtime_error("Failed to configure udp");
+                    }
+
+                    // Add encoder/udp to pipeline
+                    app_resources->pipeline->add_stage(app_resources->encoders[id], StageType::SINK);
+                    app_resources->pipeline->add_stage(app_resources->udp_outputs[id], StageType::SINK);
+
+                    // Subscribe udp to encoder
+                    app_resources->encoders[id]->add_subscriber(app_resources->udp_outputs[id]);
                 }
 
     See that this function also configures a UDP module for each encoder. This is because the encoder will push its output to the UDP module, which will then send it to the specified IP and port.
+    You can also note that since we wrapped the encoder and UDP modules in the Stage class, we can easily add them to the pipeline and subscribe them to each other using the **add_subscriber()** function.
 
 A Note on UDP module
 ~~~~~~~~~~~~~~~~~~~~
-Although not implemented as a Stage class like the AI Pipeline, the UDP module is a simple class that can be used to send buffers to a specified IP and port. It is used in this application to send encoded video streams to a remote host.
-It is implemented in **infra/udp_stage.hpp** as a mirror of the Frontend and Encoder C++ modules in the Media Library, with parallel usage.
+The UDP module is a simple class that can be used to send buffers to a specified IP and port. It is used in this application to send encoded video streams to a remote host.
+It is implemented in **pipeline_infra/udp_stage.hpp** as a mirror of the Frontend and Encoder C++ modules in the Media Library, with parallel usage and Stage wrapper.
 
 Creating the Pipeline
 ---------------------
@@ -718,62 +796,60 @@ After configuring the frontend and encoder modules, the main.cpp creates the pip
 
         .. code-block:: cpp
 
-            void create_pipeline(std::shared_ptr<AppResources> app_resources)
+            void create_ai_pipeline(std::shared_ptr<AppResources> app_resources)
             {
-                // Create pipeline
-                app_resources->pipeline = std::make_shared<Pipeline>();
-
-                // Create pipeline stages
-                std::shared_ptr<TillingCropStage> tilling_stage = std::make_shared<TillingCropStage>(TILLING_STAGE,40, TILLING_INPUT_WIDTH, TILLING_INPUT_HEIGHT,
+                // AI Pipeline Stages
+                std::shared_ptr<TillingCropStage> tilling_stage = std::make_shared<TillingCropStage>(TILLING_STAGE,50, TILLING_INPUT_WIDTH, TILLING_INPUT_HEIGHT,
                                                                                                     TILLING_OUTPUT_WIDTH, TILLING_OUTPUT_HEIGHT,
                                                                                                     "", DETECTION_AI_STAGE, TILES,
-                                                                                                    5, false, app_resources->print_fps);
-                std::shared_ptr<HailortAsyncStage> detection_stage = std::make_shared<HailortAsyncStage>(DETECTION_AI_STAGE, YOLO_HEF_FILE, 5, 50 ,"device0", 10, 8, std::chrono::milliseconds(100), app_resources->print_fps);
+                                                                                                    5, true, app_resources->print_fps, StagePoolMode::BLOCKING);
+                std::shared_ptr<HailortAsyncStage> detection_stage = std::make_shared<HailortAsyncStage>(DETECTION_AI_STAGE, YOLO_HEF_FILE, 5, 50 ,"device0", 5, 10, 5, 
+                                                                                                        std::chrono::milliseconds(100), app_resources->print_fps, StagePoolMode::BLOCKING);
                 std::shared_ptr<PostprocessStage> detection_post_stage = std::make_shared<PostprocessStage>(POST_STAGE, YOLO_POST_SO, YOLO_FUNC_NAME, "", 5, false, app_resources->print_fps);
                 std::shared_ptr<AggregatorStage> agg_stage = std::make_shared<AggregatorStage>(AGGREGATOR_STAGE, false, 
                                                                                             AI_VISION_SINK, 2, 
-                                                                                            POST_STAGE, 10, 
+                                                                                            POST_STAGE, 5, 5,
                                                                                             true, 0.3, 0.1,
                                                                                             false, app_resources->print_fps);
-                std::shared_ptr<TrackerStage> tracker_stage = std::make_shared<TrackerStage>(TRACKER_STAGE, 1, false, -1, app_resources->print_fps);
-                std::shared_ptr<BBoxCropStage> bbox_crop_stage = std::make_shared<BBoxCropStage>(BBOX_CROP_STAGE, 100, BBOX_CROP_INPUT_WIDTH, BBOX_CROP_INPUT_HEIGHT,
+                std::shared_ptr<BBoxCropStage> bbox_crop_stage = std::make_shared<BBoxCropStage>(BBOX_CROP_STAGE, 150, BBOX_CROP_INPUT_WIDTH, BBOX_CROP_INPUT_HEIGHT,
                                                                                                 BBOX_CROP_OUTPUT_WIDTH, BBOX_CROP_OUTPUT_HEIGHT,
-                                                                                                AGGREGATOR_STAGE_2, LANDMARKS_AI_STAGE, BBOX_CROP_LABEL, 1, false, app_resources->print_fps);
-                std::shared_ptr<HailortAsyncStage> landmarks_stage = std::make_shared<HailortAsyncStage>(LANDMARKS_AI_STAGE, LANDMARKS_HEF_FILE, 20, 101 ,"device0", 1, 1, std::chrono::milliseconds(100), app_resources->print_fps);
-                std::shared_ptr<PostprocessStage> landmarks_post_stage = std::make_shared<PostprocessStage>(LANDMARKS_POST_STAGE, LANDMARKS_POST_SO, LANDMARKS_FUNC_NAME, "", 50, false, app_resources->print_fps);
-                std::shared_ptr<AggregatorStage> agg_stage_2 = std::make_shared<AggregatorStage>(AGGREGATOR_STAGE_2, false, 
-                                                                                                BBOX_CROP_STAGE, 2, 
-                                                                                                LANDMARKS_POST_STAGE, 30,
+                                                                                                AGGREGATOR_STAGE_2, LANDMARKS_AI_STAGE, BBOX_CROP_LABEL, 1, false, 
+                                                                                                app_resources->print_fps, StagePoolMode::BLOCKING);
+                std::shared_ptr<HailortAsyncStage> landmarks_stage = std::make_shared<HailortAsyncStage>(LANDMARKS_AI_STAGE, LANDMARKS_HEF_FILE, 100, 201 ,"device0", 1, 50, 1, 
+                                                                                                        std::chrono::milliseconds(100), app_resources->print_fps, StagePoolMode::BLOCKING);
+                std::shared_ptr<PostprocessStage> landmarks_post_stage = std::make_shared<PostprocessStage>(LANDMARKS_POST_STAGE, LANDMARKS_POST_SO, LANDMARKS_FUNC_NAME, "", 100, false, app_resources->print_fps);
+                std::shared_ptr<AggregatorStage> agg_stage_2 = std::make_shared<AggregatorStage>(AGGREGATOR_STAGE_2, true, 
+                                                                                                BBOX_CROP_STAGE, 3, 
+                                                                                                LANDMARKS_POST_STAGE, 100,
                                                                                                 false, 0.3, 0.1,
                                                                                                 false, app_resources->print_fps);
-                std::shared_ptr<OverlayStage> overlay_stage = std::make_shared<OverlayStage>(OVERLAY_STAGE, 1, false, app_resources->print_fps);
-                std::shared_ptr<CallbackStage> sink_stage = std::make_shared<CallbackStage>(AI_CALLBACK_STAGE, 1, false);
+                std::shared_ptr<PersistStage> tracker_stage = std::make_shared<PersistStage>(TRACKER_STAGE, 5, 1, false, app_resources->print_fps);
+                std::shared_ptr<OverlayStage> overlay_stage = std::make_shared<OverlayStage>(OVERLAY_STAGE, app_resources->skip_drawing, app_resources->partial_landmarks, LANDMARKS_RANGE_MIN, LANDMARKS_RANGE_MAX, 1, false, app_resources->print_fps);
                 
                 // Add stages to pipeline
                 app_resources->pipeline->add_stage(tilling_stage);
                 app_resources->pipeline->add_stage(detection_stage);
                 app_resources->pipeline->add_stage(detection_post_stage);
                 app_resources->pipeline->add_stage(agg_stage);
-                app_resources->pipeline->add_stage(tracker_stage);
                 app_resources->pipeline->add_stage(bbox_crop_stage);
-                app_resources->pipeline->add_stage(agg_stage_2);
-                app_resources->pipeline->add_stage(overlay_stage);
-                app_resources->pipeline->add_stage(sink_stage);
                 app_resources->pipeline->add_stage(landmarks_stage);
                 app_resources->pipeline->add_stage(landmarks_post_stage);
+                app_resources->pipeline->add_stage(agg_stage_2);
+                app_resources->pipeline->add_stage(tracker_stage);
+                app_resources->pipeline->add_stage(overlay_stage);
 
                 // Subscribe stages to each other
                 tilling_stage->add_subscriber(detection_stage);
                 detection_stage->add_subscriber(detection_post_stage);
                 detection_post_stage->add_subscriber(agg_stage);
-                agg_stage->add_subscriber(tracker_stage);
-                tracker_stage->add_subscriber(bbox_crop_stage);
+                agg_stage->add_subscriber(bbox_crop_stage);
                 bbox_crop_stage->add_subscriber(agg_stage_2);
                 bbox_crop_stage->add_subscriber(landmarks_stage);
                 landmarks_stage->add_subscriber(landmarks_post_stage);
                 landmarks_post_stage->add_subscriber(agg_stage_2);
-                agg_stage_2->add_subscriber(overlay_stage);
-                overlay_stage->add_subscriber(sink_stage);
+                agg_stage_2->add_subscriber(tracker_stage);
+                tracker_stage->add_subscriber(overlay_stage);
+                overlay_stage->add_subscriber(app_resources->encoders[AI_VISION_SINK]);
             }
 
     In general, the three steps are:
@@ -788,25 +864,23 @@ After configuring the frontend and encoder modules, the main.cpp creates the pip
 Connecting Media Library to the AI Pipeline
 -------------------------------------------
 
-The last step in building the application is to connect the Media Library modules to the AI pipeline. This is done by connecting the respective callbacks from the modules to push and pull from each other.
-The general flow of callbacks should be as follows:
+The last step in building the application is to connect the Media Library modules to the AI pipeline. 
+Since we wrapped the Media Library modules in the Stage class, we can easily connect them to the pipeline by subscribing them to each other:
 
-.. figure:: readme_resources/app_structure/callbacks.png
+.. figure:: readme_resources/app_structure/connecting_medialib.png
     :alt: Application Pipeline
     :align: center
     :height: 486 px
     :width: 1739 px
     :scale: 80%
 
-    The callbacks of each module can push buffers to the next stage in the pipeline.
-
-Note that to push buffers fromt he AI pipeline to the 4K encoder we added a CallbackStage, which is a simple stage that takes a user defined callback.
+    Each module can push buffers to the next stage in the pipeline based on subscribers.
 
 The subscribe_elements() function implements the figure shown above:
 
         .. code-block:: cpp
 
-            void subscribe_elements(std::shared_ptr<AppResources> app_resources)
+            void subscribe_to_frontend(std::shared_ptr<AppResources> app_resources)
             {
                 // Get frontend output streams
                 auto streams = app_resources->frontend->get_outputs_streams();
@@ -817,97 +891,33 @@ The subscribe_elements() function implements the figure shown above:
                 }
 
                 // Subscribe to frontend
-                FrontendCallbacksMap fe_callbacks;
                 for (auto s : streams.value())
                 {
                     if (s.id == AI_SINK)
                     {
                         std::cout << "subscribing ai pipeline to frontend for '" << s.id << "'" << std::endl;
-                        app_resources->pipeline->get_stage_by_name(TILLING_STAGE)->add_queue(s.id);
-                        fe_callbacks[s.id] = [s, app_resources](HailoMediaLibraryBufferPtr buffer, size_t size)
-                        {
-                            BufferPtr wrapped_buffer = std::make_shared<Buffer>(buffer);
-                            app_resources->pipeline->get_stage_by_name(TILLING_STAGE)->push(wrapped_buffer, s.id);
-                        };
+                        // Subscribe tiling to frontend
+                        app_resources->frontend->subscribe_to_stream(s.id, 
+                            std::static_pointer_cast<ConnectedStage>(app_resources->pipeline->get_stage_by_name(TILLING_STAGE)));
                     }
                     else if (s.id == AI_VISION_SINK)
                     {
                         std::cout << "subscribing to frontend for '" << s.id << "'" << std::endl;
-                        ConnectedStagePtr agg_stage = std::static_pointer_cast<ConnectedStage>(app_resources->pipeline->get_stage_by_name(AGGREGATOR_STAGE));
-                        fe_callbacks[s.id] = [s, app_resources, agg_stage](HailoMediaLibraryBufferPtr buffer, size_t size)
-                        {                      
-                            BufferPtr wrapped_buffer = std::make_shared<Buffer>(buffer);
-                            CroppingMetadataPtr cropping_meta = std::make_shared<CroppingMetadata>(TILES.size());
-                            wrapped_buffer->add_metadata(cropping_meta);
-                            agg_stage->push(wrapped_buffer, s.id);
-                        };
+                        // Subscribe tiling aggregator to frontend
+                        app_resources->frontend->subscribe_to_stream(s.id, 
+                            std::static_pointer_cast<ConnectedStage>(app_resources->pipeline->get_stage_by_name(AGGREGATOR_STAGE)));
                     }
                     else
                     {
                         std::cout << "subscribing to frontend for '" << s.id << "'" << std::endl;
-                        fe_callbacks[s.id] = [s, app_resources](HailoMediaLibraryBufferPtr buffer, size_t size)
-                        {
-                            app_resources->encoders[s.id]->add_buffer(buffer);
-                        };
+                        // Subscribe encoder to frontend
+                        app_resources->frontend->subscribe_to_stream(s.id, app_resources->encoders[s.id]);
                     }
                 }
-                app_resources->frontend->subscribe(fe_callbacks);
-                
-                ...
+            }
 
     This first portion of the function connects the frontend otuput streams to the appropriate subscribers. We use the stream ID to determine what stream is being subscribed to.
     The AI_SINK stream is connected to the TillingCropStage, the AI_VISION_SINK stream is connected to the AggregatorStage, and all other streams are connected to their respective encoders.
-    
-    The Stage class we implemented does not take a **HailoMediaLibraryBufferPtr** but a **BufferPtr**. This is because we want to manage the refcount of the **HailoMediaLibraryBufferPtr** in the Buffer class.
-    So for example, given a **HailoMediaLibraryBufferPtr** from the frentend module, we wrap the buffer in a **BufferPtr** and push it to the tiling stage like so:
-
-        .. code-block:: cpp
-
-            fe_callbacks[s.id] = [s, app_resources](HailoMediaLibraryBufferPtr buffer, size_t size)
-            {
-                BufferPtr wrapped_buffer = std::make_shared<Buffer>(buffer);
-                app_resources->pipeline->get_stage_by_name(TILLING_STAGE)->push(wrapped_buffer, s.id);
-            };
-
-    We then connect the encoder modules to their respective UDP modules:
-
-        .. code-block:: cpp
-
-                // Subscribe to encoders
-                for (const auto &entry : app_resources->encoders)
-                {
-                    if (entry.first == AI_SINK)
-                    {
-                        // AI pipeline does not get an encoder since it is merged into 4K
-                        continue;
-                    }
-
-                    output_stream_id_t streamId = entry.first;
-                    MediaLibraryEncoderPtr encoder = entry.second;
-                    std::cout << "subscribing udp to encoder for '" << streamId << "'" << std::endl;
-                    app_resources->encoders[streamId]->subscribe(
-                        [app_resources, streamId](HailoMediaLibraryBufferPtr buffer, size_t size)
-                        {
-                            app_resources->udp_outputs[streamId]->add_buffer(buffer, size);
-                        });
-                }
-
-    Lastly we connect the AI pipeline to the 4K encoder:
-
-        .. code-block:: cpp
-
-                // Subscribe ai stage to encoder
-                std::cout << "subscribing ai pipeline to encoder '" << AI_VISION_SINK << "'" << std::endl;
-                CallbackStagePtr ai_sink_stage = std::static_pointer_cast<CallbackStage>(app_resources->pipeline->get_stage_by_name(AI_CALLBACK_STAGE));
-                ai_sink_stage->set_callback(
-                    [app_resources](BufferPtr data)
-                    {
-                        if (app_resources->print_latency) {
-                            app_resources->pipeline->print_latency();
-                        }
-                        app_resources->encoders[AI_VISION_SINK]->add_buffer(data->get_buffer());
-                    });
-            }
 
 Running the Pipeline
 --------------------
@@ -916,17 +926,20 @@ let the application run for an appointed amount of time, and then finally stop t
 
         .. code-block:: cpp
 
-                // Start pipeline
-                start_app(app_resources);
+                    // Start pipeline
+                    std::cout << "Starting." << std::endl;
+                    app_resources->pipeline->start_pipeline();
 
-                std::cout << "Using frontend config: " << app_resources->frontend_config << std::endl;
-                std::cout << "Started playing for " << timeout << " seconds." << std::endl;
+                    std::cout << "Using frontend config: " << app_resources->frontend_config << std::endl;
+                    std::cout << "Started playing for " << timeout << " seconds." << std::endl;
 
-                // Wait
-                std::this_thread::sleep_for(std::chrono::seconds(timeout));
+                    // Wait
+                    std::this_thread::sleep_for(std::chrono::seconds(timeout));
 
-                // Stop pipeline
-                stop_app(app_resources);
-
+                    // Stop pipeline
+                    std::cout << "Stopping." << std::endl;
+                    app_resources->pipeline->stop_pipeline();
+                    app_resources->clear();
+                }
                 return 0;
             }
