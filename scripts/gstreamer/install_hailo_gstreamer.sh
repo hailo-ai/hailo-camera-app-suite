@@ -102,7 +102,7 @@ function main() {
                             -Dtarget=$TARGET \
                             -Dtarget_platform=$TARGET_PLATFORM \
                             -Dlibargs="-I/usr/include/hailo/,-I/usr/include/gstreamer-1.0/gst/hailo/" \
-                             -Dinclude_python=true -Dpython_version=$PYTHON_VERSION
+                            -Dinclude_unit_tests=$INCLUDE_UNIT_TESTS -Dinclude_python=true -Dpython_version=$PYTHON_VERSION
 
     if [[ -f "build.$BUILD_MODE/.ninja_log" ]]; then
         # Solve permission bug

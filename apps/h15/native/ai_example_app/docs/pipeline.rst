@@ -29,26 +29,26 @@ The Frontend pipeline is provided by the Media Library package on the Hailo-15, 
 
 All of these features are configurable and can be enabled or disabled as needed by the user.
 
-In the case of this application the Frontend resizes the image and outputs **4 resolutions**: 
-**4K** (3840 x 2160), **HD** (1280 x 720), **SD** (720 x 480), and **FHD** (1920 x 1080).
+In the case of this application the Frontend resizes the image and outputs **3 resolutions**: 
+**4K** (3840 x 2160), **HD** (1280 x 720), and **FHD** (1920 x 1080).
 The FHD resolution stream is used for inference, while the other streams are displayed on the screen.
 It is important to note here that each stream can be output at a different framerate (also configurable to the user). 
-For the case of this application, the three vision streams that go to display are output at 30 FPS, while the AI stream (FHD) is output at **15 FPS**.
+For the case of this application, the two vision streams that go to display are output at 30 FPS, while the AI stream (FHD) is output at **15 FPS**.
 
 For further reading on the Frontend module, please refer to the Media Library documentation.
 
-HD/SD Pipelines
-===============
-.. image:: readme_resources/hd_sd_streams.png
+HD Pipeline
+===========
+.. image:: readme_resources/hd_stream.png
     :alt: Application Pipeline
     :align: center
 
-The HD and SD pipelines are identical, and are responsible for encoding and streaming their video feed to RTSP.
+The HD pipeline is responsible for encoding and streaming the video feed to RTSP.
 The Encoder/OSD module is provided by the Media Library package on the Hailo-15, and is accelerated by both the DSP and the encoder hardware.
 
-After the Frontend pipeline, the HD and SD pipelines take the resized video streams and perform the following operations:
+After the Frontend pipeline, the HD pipeline takes the resized video stream and performs the following operations:
 
-- **On-Screen Display (OSD)** - The HD/SD pipelines add overlays such as text, graphics, and timestamps to the video feed uisng DSP blending.
+- **On-Screen Display (OSD)** - The HD pipeline adds overlays such as text, graphics, and timestamps to the video feed uisng DSP blending.
 - **Encoding** - Video encoding to compress the video feed for streaming purposes. This is done with the hardware accelerated encoder provided in the Hailo-15.
 - **RTP/UDP Streaming** - The encoded video is payloaded into RTP packets and streamed over UDP to the host machine.
 
@@ -125,12 +125,22 @@ Between the two input framerates (30 FPS for 4K and 15 FPS for FHD), this means 
 
     The detections from the 5 tiles are aggregated to the 4K image space.
 
-Tracking
---------
+Tracking / Persist
+------------------
 As mentioned above, we now have a 4K stream at 30FPS that has detection boxes for every second frame.
+We have two options on how to complete the the detections in the missing frames:
+
+* **Tracking**: We can track the detected objects between frames. This is done by computing box movement on the CPU.
+* **Persist**: We can persist the detections from the previous frame to the next frame.
+
+We will explain how the two look here:
+
+Tracking
+~~~~~~~~
 We can complete the missing frames by tracking the detected objects between frames. 
 This is done using the HailoTracker API provided in Tappas, which tracks bounding boxes using a Joint Detection and Embedding (JDE) algorithm.
-The tracker uses a Kalman Filter to predict bounding box movements, which completes the missing frames in the 4K stream.
+The tracker uses a Kalman Filter to predict bounding box movements, which completes the missing frames in the 4K stream. This can 
+be very accurate at approximating the movement of objects between frames, but can be compute-heavy at large numbers of detections.
 
 .. figure:: readme_resources/tracking.png
     :alt: Application Pipeline
@@ -140,6 +150,16 @@ The tracker uses a Kalman Filter to predict bounding box movements, which comple
     :scale: 100%
 
     The tracker can be used to complete detections between frames.
+
+Persist
+~~~~~~~
+The persist method is simpler than tracking, and involves simply applying the latest seen bounding boxes to the next frame. This method is
+faster, as no compute is required, and therefore also scales very well when large numbers of objects are detected. While less accurate than true tracking,
+this method is still very useful for many scenarios. Considering that the we only need to complete detections for 1 frame until the next batch of detections arrives,
+this method is very suitable for this application as the boxes cannot travel as much.
+
+In the current iteration of the application, the persist method is used to complete the detections between frames. This step is applied near the end-to-end 
+of the AI pipeline, before the 4K stream is passed for object drawing.
 
 From here the 4K stream continues to stage 2 of the AI pipeline.
 
@@ -207,10 +227,16 @@ Aggregation
 This aggregation stage is similar to the one in the first half of the AI pipeline, but here we have a dynamic number of cropped images to add to the 4K stream.
 The aggregator will take the metadata from the 4K stream that arrived and use that to know how many faces should arrive.
 
+Persist
+-------
+It is at this stage where we persist the detections between frames. This is done by applying the latest seen detections to the next frame. The latest
+seen detections will be applied until new detections arrive, at which point those new detections will be used and persisted  instead. This stage comes with a configurable
+half-life, in case the originally detected object is no longer in the frame.
+
 Overlay
 -------
 The next stage calls the HailoOverlay module provided in Tappas to draw all the inference results on the image.
 
 Streaming AI Pipeline
 ---------------------
-From here the AI Piepline is the same as the `HD/SD Pipelines <HD/SD Pipelines>`_: OSD blending is performed by the DSP, and the image is encoded then finaly streamed to the host machine.
+From here the AI Piepline is the same as the `HD Pipeline <#hd-pipeline>`_: OSD blending is performed by the DSP, and the image is encoded then finaly streamed to the host machine.
