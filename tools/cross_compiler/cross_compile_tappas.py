@@ -80,6 +80,7 @@ def parse_args():
     parser.add_argument('--build-lib', help='Build a specific tappas lib target (default all)', choices=POSSIBLE_BUILD_LIBS, default='all')
     parser.add_argument('--clean-build-dir', action='store_true', help='Delete previous build cache (default false)', default=False)
     parser.add_argument('--install-to-rootfs', action='store_true', help='Install to rootfs (default false)', default=False)
+    parser.add_argument('--check-req-packages', action='store_true', help='Install compiler packages (default false)', default=False)
 
     return parser.parse_args()
 
@@ -88,7 +89,8 @@ if __name__ == '__main__':
     args = parse_args()
     logging.basicConfig(stream=sys.stdout, level=logging.INFO)
 
-    install_compilers_apt_packages(args.arch)
+    if args.check_req_packages:
+        install_compilers_apt_packages(args.arch)
 
     gst_installer = TappasInstaller(arch=args.arch, target=args.target, build_type=args.build_type,
                                     toolchain_dir_path=args.toolchain_dir_path,

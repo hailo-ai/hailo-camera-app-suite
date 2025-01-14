@@ -1,5 +1,6 @@
 #pragma once
 // General includes
+#include <atomic>
 #include <queue>
 #include <mutex>
 #include <thread>
@@ -35,7 +36,7 @@ private:
     // pool members
     int m_output_pool_size;  ///< Size of the output buffer pool.
     std::unordered_map<std::string, MediaLibraryBufferPoolPtr> m_tensor_buffer_pools; ///< Buffer pools for each output tensor.
-
+    
     // hailort members
     std::unique_ptr<hailort::VDevice> m_vdevice;    ///< HailoRT virtual device.
     std::shared_ptr<hailort::InferModel> m_infer_model; ///< HailoRT inference model.
@@ -50,6 +51,15 @@ private:
     int m_batch_size;   ///< Batch size for inference.
     int m_scheduler_threshold; ///< Threshold for the scheduler.
     std::chrono::milliseconds m_scheduler_timeout; ///< Timeout for the scheduler.
+
+    std::atomic<size_t> m_active_jobs;  ///< Number of active inference jobs.
+    size_t m_jobs_limit; ///< Limit on the number of active inference jobs.
+    std::mutex m_active_jobs_mutex; ///< Mutex for the active jobs counter.
+    std::condition_variable m_active_jobs_cv; ///< Condition variable for the active jobs counter.
+    std::condition_variable m_available_buffers_cv;
+    std::mutex m_buff_pool_mutex;
+    StagePoolMode m_pool_mode; //< Pool mode for the buffer pool used in this stage
+    
     
 public:
     /**
@@ -65,12 +75,14 @@ public:
      * @param scheduler_timeout Timeout for the scheduler.
      * @param print_fps Whether to print frames per second information.
      */
-    HailortAsyncStage(std::string name, std::string hef_path, size_t queue_size, int output_pool_size, std::string group_id, int batch_size,
-                      int scheduler_threshold = 4, std::chrono::milliseconds scheduler_timeout = std::chrono::milliseconds(100), bool print_fps=false) :
+    HailortAsyncStage(std::string name, std::string hef_path, size_t queue_size, int output_pool_size, std::string group_id, int batch_size, size_t job_limit,
+                      int scheduler_threshold = 4, std::chrono::milliseconds scheduler_timeout = std::chrono::milliseconds(100), bool print_fps=false,
+                      StagePoolMode pool_mode=StagePoolMode::FAIL_ON_EMPTY_POOL) :
         ConnectedStage(name, queue_size, false, print_fps), m_output_pool_size(output_pool_size), m_hef_path(hef_path), m_group_id(group_id), m_batch_size(batch_size),
-        m_scheduler_threshold(scheduler_threshold), m_scheduler_timeout(scheduler_timeout)
+        m_scheduler_threshold(scheduler_threshold), m_scheduler_timeout(scheduler_timeout), m_jobs_limit(job_limit), m_pool_mode(pool_mode)
     {
         m_last_infer_job = nullptr;
+        m_active_jobs = 0;
     }
 
     /**
@@ -159,6 +171,10 @@ public:
                 return AppStatus::HAILORT_ERROR;
             }
         }
+        for (auto &queue : m_queues)
+        {
+            queue->flush();
+        }
 
         return AppStatus::SUCCESS;
     }
@@ -171,22 +187,22 @@ public:
      */
     AppStatus set_pix_buf(const HailoMediaLibraryBufferPtr buffer)
     {
-        auto y_plane_buffer = buffer->get_plane_ptr(0);
+        int y_plane_fd = buffer->get_plane_fd(0);
         uint32_t y_plane_size = buffer->get_plane_size(0);
 
-        auto uv_plane_buffer = buffer->get_plane_ptr(1);
+        int uv_plane_fd = buffer->get_plane_fd(1);
         uint32_t uv_plane_size = buffer->get_plane_size(1);
 
         hailo_pix_buffer_t pix_buffer{};
-        pix_buffer.memory_type = HAILO_PIX_BUFFER_MEMORY_TYPE_USERPTR;
+        pix_buffer.memory_type = HAILO_PIX_BUFFER_MEMORY_TYPE_DMABUF;
         pix_buffer.number_of_planes = 2;
         pix_buffer.planes[0].bytes_used = y_plane_size;
         pix_buffer.planes[0].plane_size = y_plane_size; 
-        pix_buffer.planes[0].user_ptr = reinterpret_cast<void*>(y_plane_buffer);
+        pix_buffer.planes[0].fd = y_plane_fd;
 
         pix_buffer.planes[1].bytes_used = uv_plane_size;
         pix_buffer.planes[1].plane_size = uv_plane_size;
-        pix_buffer.planes[1].user_ptr = reinterpret_cast<void*>(uv_plane_buffer);
+        pix_buffer.planes[1].fd = uv_plane_fd;
 
         auto status = m_bindings.input()->set_pix_buffer(pix_buffer);
         if (HAILO_SUCCESS != status) {
@@ -212,8 +228,17 @@ public:
             BufferPtr tensor_buffer_ptr = std::make_shared<Buffer>(tensor_buffer);
             if (m_tensor_buffer_pools[output.name()]->acquire_buffer(tensor_buffer) != MEDIA_LIBRARY_SUCCESS)
             {
-                std::cerr << "Failed to acquire buffer " << m_stage_name <<std::endl;
-                return AppStatus::BUFFER_ALLOCATION_ERROR;
+                if (m_pool_mode == StagePoolMode::FAIL_ON_EMPTY_POOL) {
+                    return AppStatus::BUFFER_ALLOCATION_ERROR;
+                } else if (m_pool_mode == StagePoolMode::BLOCKING) {
+                    std::unique_lock<std::mutex> lock(m_buff_pool_mutex);
+                    m_available_buffers_cv.wait(lock, [this, output, tensor_buffer] { return m_tensor_buffer_pools[output.name()]->acquire_buffer(tensor_buffer) == MEDIA_LIBRARY_SUCCESS; });
+                } else {
+                    for (auto& buffer : tensor_buffers) {
+                        buffer.second.reset();
+                    }
+                    return AppStatus::SUCCESS;
+                }
             }
 
             // Set entry in map
@@ -250,6 +275,10 @@ public:
         // Run the async infer api, when inference is done it will call the given callback
         std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
         auto job = m_configured_infer_model.run_async(m_bindings, [tensor_buffers, input_buffer, begin, this](const hailort::AsyncInferCompletionInfo& completion_info) {
+            // active job finished
+            --this->m_active_jobs;
+            m_active_jobs_cv.notify_one();
+            
             // check infer status
             if (completion_info.status != HAILO_SUCCESS) {
                 std::cerr << "Failed to run async infer, Hailort status = " << completion_info.status << std::endl;
@@ -280,6 +309,7 @@ public:
 
             return AppStatus::SUCCESS;
         });
+        ++m_active_jobs;
 
         if (!job) {
             std::cerr << "Failed to start async infer job, status = " << job.status() << std::endl;
@@ -301,6 +331,8 @@ public:
      */
     AppStatus process(BufferPtr data)
     {
+        std::unique_lock<std::mutex> lock(m_active_jobs_mutex);
+        m_active_jobs_cv.wait(lock, [this] { return m_active_jobs < m_jobs_limit; });
 
         // Set the input buffer
         if (set_pix_buf(data->get_buffer()) != AppStatus::SUCCESS)
